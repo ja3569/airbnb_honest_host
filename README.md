@@ -7,3 +7,5 @@ The Superhost program at Airbnb gives the host more visibility, earning potentia
 We obtained our dataset from Insideairbnb.com, where newly scraped data of listings in dozens of cities and countries around the world was updated quarterly for public uses. 
 
 ## File directory
+[project_dm_final.Rmd](/Documentation/project_dm_final.Rmd) provides the R code we wrote
+[ADM_Final Project.pdf](/Documentation/ADM_Final Project.pdf) is our written report for the project
