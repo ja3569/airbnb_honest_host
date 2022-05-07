@@ -1,0 +1,323 @@
+---
+title: "project_dm_final"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Add libraries
+```{r, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(SnowballC)
+library(data.table)
+library(vader) #sentiment analysis
+library(schrute) #sentiment analysis
+library(sentimentr)
+library(ggplot2)
+```
+
+## Load data
+Load data from host sides and concatenate wording information such as amenities, general description about renting place, neighborhood overview, and host's personal information. Notice that we merely gather information given by hosts(landlords) instead of renters(clients). 
+```{r}
+#loading csv file
+host_df <- read.csv("listings-details.csv",header=TRUE)
+host_desc <- host_df %>% select(id, description, amenities, neighborhood_overview, host_about)
+
+#concatenate comments in a column by host's id
+library('stringr')
+host_desc$desc <- str_c(host_desc$description, ' ', host_desc$amenities, ' ', host_desc$neighborhood_overview, ' ', host_desc$host_about)
+concat_host_desc <- host_desc$desc
+concat_host_desc <- as.list(concat_host_desc[1:100]) 
+```
+
+Likewise, Load data from residents' side. We basically focus on residents' reviews on the renting experience with the host. Notice that each host is connected with more than one residents over time. We concatenate all reviews for each singular host.
+```{r}
+#load csv files
+reviews = as.data.frame(read.csv("reviews.csv",header=TRUE)%>%select(listing_id,comments))
+
+#concatenate comments in a column by listing_id
+concat_reviews <- reviews %>% group_by(listing_id) %>% summarise(comments=paste(comments, collapse=" "))
+concat_reviews <- concat_reviews[1:100,]
+comments <- concat_reviews$comments
+comments <- as.list(comments)
+```
+
+## General Description
+To start with, we aim to generate a combination of bigrams and trigrams, in replace of unigrams. This is because unigrams may perform a false indication. As an example, if the actural wording is "not clean", unigrams will store "not" and "clean" separately as two words, and therefore the occurrence of "not clean" will be mistakenly counted as "clean". To avoid these build-in errors, we make attempt to store n-gram tokens. That is, we place our eyes on bigrams (2 consecutive words) and trigrams (3 consecutive words).
+Also, we ace our focus on the descriptive tokens, such as "air conditioner" of "tidy place". We exempt stop words (such as "am", "would") and noisy words (such as "<br>") in the generation stage and perform stemming and lemmatization to avoid repeated words under different forms.
+
+
+## Data Wrangling and Bigram Generation
+We are about to generate bigrams in this section, and move on to generate trigrams in the next section.
+Now, create a customized stopwords excluding all kinds of negations.
+```{r}
+not_list <- c('no', 'not', "aren't", "couldn't", "didn't", "doesn't", "hadn't", "hasn't", "haven't", "isn't", "mustn't", "shouldn't", "wasn't", "weren't", "won't", 'wouldn', "wouldn't")
+ori_stop_words <- stop_words$word
+new_stop_words <- ori_stop_words[!(ori_stop_words %in% not_list)]
+```
+
+Let's start with descriptions from hosts' side. Apply data cleaning and convert the wording description to bigrams. Notice that we lower case all words, remove html tags, correct the misspelled words, remove stopwords, and perform stemming to avoid repeated words with different forms. 
+```{r}
+host_desc$desc <- tolower(host_desc$desc)
+host_desc$desc <- gsub("[[:digit:]]+", " ", host_desc$desc)
+host_desc$desc <- gsub("<.*?>", " ", host_desc$desc)
+host_desc$desc <- gsub(",:'!\"", " ", host_desc$desc)
+
+words <- list()
+for (dfid in c(1:length(concat_host_desc))) {
+    cur_bigrams <- host_desc[dfid,] %>% 
+      select('desc') %>% 
+      unnest_tokens(bigram, 'desc', token = "ngrams", n = 2) %>%
+      separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+      filter(
+        !word1 %in% new_stop_words,
+        !str_detect(word1, pattern = "[[:digit:]]"), 
+        !str_detect(word1, pattern = "[[:punct:]]"),
+        !str_detect(word1, pattern = "(.)\\1{2,}"), 
+        !str_detect(word1, pattern = "\\b(.)\\b")) %>%
+      filter(
+        !word2 %in% new_stop_words,
+        !str_detect(word2, pattern = "[[:digit:]]"), 
+        !str_detect(word2, pattern = "[[:punct:]]"),
+        !str_detect(word2, pattern = "(.)\\1{2,}"), 
+        !str_detect(word2, pattern = "\\b(.)\\b")) %>%
+      mutate(word1 = wordStem(word1), word2 = wordStem(word2)) %>%
+      unite(bigram, c(word1, word2), sep = " ") %>%
+      count(bigram, sort = TRUE)
+    transpose_bigrams <- transpose(data.frame(cur_bigrams))
+    colnames(transpose_bigrams) <- transpose_bigrams[1,]
+    transpose_bigrams <- transpose_bigrams[-1,]
+    words[[dfid]] <- transpose_bigrams
+    rm(transpose_bigrams)
+    gc()
+}
+
+desc_bigram_df <- bind_rows(words)
+desc_bigram_df[is.na(desc_bigram_df)] <- 0
+
+#test
+desc_bigram_df[1:3, 1:5]
+```
+
+Next, we shift our focus to residents' side. Apply data cleaning and convert the wording reviews to bigrams. Notice that we lower case all words, remove html tags, correct the misspelled words, remove stopwords, and perform stemming to avoid repeated words with different forms. 
+```{r}
+concat_reviews$comments <- tolower(concat_reviews$comments)
+concat_reviews$comments <- gsub("[[:digit:]]+", " ", concat_reviews$comments)
+concat_reviews$comments <- gsub("<.*?>", " ", concat_reviews$comments)
+concat_reviews$comments <- gsub(",:'!\"", " ", concat_reviews$comments)
+
+words <- list()
+for (dfid in c(1:length(comments))) {
+    cur_bigrams <- concat_reviews[dfid,] %>% 
+      select('comments') %>% 
+      unnest_tokens(bigram, 'comments', token = "ngrams", n = 2) %>%
+      separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+      filter(
+        !word1 %in% new_stop_words,
+        !str_detect(word1, pattern = "[[:digit:]]"), 
+        !str_detect(word1, pattern = "[[:punct:]]"),
+        !str_detect(word1, pattern = "(.)\\1{2,}"), 
+        !str_detect(word1, pattern = "\\b(.)\\b")) %>%
+      filter(
+        !word2 %in% new_stop_words,
+        !str_detect(word2, pattern = "[[:digit:]]"), 
+        !str_detect(word2, pattern = "[[:punct:]]"),
+        !str_detect(word2, pattern = "(.)\\1{2,}"), 
+        !str_detect(word2, pattern = "\\b(.)\\b")) %>%
+      mutate(word1 = wordStem(word1), word2 = wordStem(word2)) %>%
+      unite(bigram, c(word1, word2), sep = " ") %>%
+      count(bigram, sort = TRUE)
+    transpose_bigrams <- transpose(data.frame(cur_bigrams))
+    colnames(transpose_bigrams) <- transpose_bigrams[1,]
+    transpose_bigrams <- transpose_bigrams[-1,]
+    words[[dfid]] <- transpose_bigrams
+    rm(transpose_bigrams)
+    gc()
+}
+
+review_bigram_df <- bind_rows(words)
+review_bigram_df[is.na(review_bigram_df)] <- 0
+
+#test
+review_bigram_df[1:3, 1:5]
+```
+
+Find intersect bigram tokens from descriptions(hosts) and reviews(residents). Create new dataframe for both sides where the columns are limited to the intersect tokens. 
+```{r}
+desc_bigram <- colnames(desc_bigram_df)
+review_bigram <- colnames(review_bigram_df)
+intersect_bigram <- intersect(desc_bigram, review_bigram)
+intersect_desc_df <- desc_bigram_df[intersect_bigram]
+intersect_review_df <- review_bigram_df[intersect_bigram]
+
+#test
+intersect_review_df[1:3, 1:5] #new review dataframe with intersect tokens
+```
+
+Consider the cases that some hosts may have fewer comments than other hosts due to a shorter renting period. That is, the counts of token occurrence are subject to the number of comments, and may not fully imply residents' evaluation on the hosts' honesty. However, we potentially suspect that the hosts with more comments are more likely to have an accurate evaluation on their honesty. To be more specific, if an Airbnb host aims to be elected as an "Honest Host", aside from providing honest description, they also need to offer more renting experiences and gather as much comments as possible. The if_occurrence table summarizes the count of each bigram token that occurs in the selections of comments for at least one time. 
+```{r}
+#hosts' side
+if_occurrence_desc_df <- intersect_desc_df 
+if_occurrence_desc_df[is.na(if_occurrence_desc_df)] <- 0
+if_occurrence_desc_df[if_occurrence_desc_df != 0] <- 1
+if_occurrence_desc_df <- data.frame(apply(if_occurrence_desc_df, 2, function(x) as.numeric(as.character(x))))
+
+#residents' side
+if_occurrence_review_df <- intersect_review_df
+if_occurrence_review_df[is.na(if_occurrence_review_df)] <- 0
+if_occurrence_review_df <- data.frame(apply(if_occurrence_review_df, 2, function(x) as.numeric(as.character(x))))
+```
+
+Now create a new dataframe called matched. If and only if 1 occurs in both if_occurrence_review_df and if_occurrence_desc_df, then the element in matched_df is 1. In all other cases, the element in matched_df is 0, representing a match failure. Also, create a new column called matched_count that counts the number of matched cases in each row. 
+```{r}
+bigram_matched_df <- data.frame(mapply(`*`, if_occurrence_review_df, if_occurrence_desc_df))
+bigram_matched_df$matched_count <- rowSums(bigram_matched_df)
+
+#test
+bigram_matched_df$matched_count
+summary(bigram_matched_df$matched_count)
+```
+
+## Trigram Generation
+The procedure is similar to that of bigram generation. Instead, we use three consecutive words to analyze the occurrence of trigrams. 
+Start with hosts' description.
+```{r}
+words <- list()
+for (dfid in c(1:length(concat_host_desc))) {
+    cur_trigrams <- host_desc[dfid,] %>% 
+      select('desc') %>% 
+      unnest_tokens(trigram, 'desc', token = "ngrams", n = 3) %>%
+      separate(trigram, into = c("word1", "word2", "word3"), sep = " ") %>%
+      filter(
+        !word1 %in% new_stop_words,
+        !str_detect(word1, pattern = "[[:digit:]]"), 
+        !str_detect(word1, pattern = "[[:punct:]]"),
+        !str_detect(word1, pattern = "(.)\\1{2,}"), 
+        !str_detect(word1, pattern = "\\b(.)\\b")) %>%
+      filter(
+        !word2 %in% new_stop_words,
+        !str_detect(word2, pattern = "[[:digit:]]"), 
+        !str_detect(word2, pattern = "[[:punct:]]"),
+        !str_detect(word2, pattern = "(.)\\1{2,}"), 
+        !str_detect(word2, pattern = "\\b(.)\\b")) %>%
+      filter(
+        !word3 %in% new_stop_words,
+        !str_detect(word3, pattern = "[[:digit:]]"), 
+        !str_detect(word3, pattern = "[[:punct:]]"),
+        !str_detect(word3, pattern = "(.)\\1{2,}"), 
+        !str_detect(word3, pattern = "\\b(.)\\b")) %>%
+      mutate(word1 = wordStem(word1), word2 = wordStem(word2), word3 = wordStem(word3)) %>%
+      unite(trigram, c(word1, word2, word3), sep = " ") %>%
+      count(trigram, sort = TRUE)
+    transpose_trigrams <- transpose(data.frame(cur_trigrams))
+    colnames(transpose_trigrams) <- transpose_trigrams[1,]
+    transpose_trigrams <- transpose_trigrams[-1,]
+    words[[dfid]] <- transpose_trigrams
+    rm(transpose_trigrams)
+    gc()
+}
+
+desc_trigram_df <- bind_rows(words)
+desc_trigram_df[is.na(desc_trigram_df)] <- 0
+```
+
+Next, count trigrams for residents' reviews.
+```{r}
+words <- list()
+for (dfid in c(1:length(comments))) {
+    cur_trigrams <- concat_reviews[dfid,] %>% 
+      select('comments') %>% 
+      unnest_tokens(trigram, 'comments', token = "ngrams", n = 3) %>%
+      separate(trigram, into = c("word1", "word2", "word3"), sep = " ") %>%
+      filter(
+        !word1 %in% new_stop_words,
+        !str_detect(word1, pattern = "[[:digit:]]"), 
+        !str_detect(word1, pattern = "[[:punct:]]"),
+        !str_detect(word1, pattern = "(.)\\1{2,}"), 
+        !str_detect(word1, pattern = "\\b(.)\\b")) %>%
+      filter(
+        !word2 %in% new_stop_words,
+        !str_detect(word2, pattern = "[[:digit:]]"), 
+        !str_detect(word2, pattern = "[[:punct:]]"),
+        !str_detect(word2, pattern = "(.)\\1{2,}"), 
+        !str_detect(word2, pattern = "\\b(.)\\b")) %>%
+      filter(
+        !word3 %in% new_stop_words,
+        !str_detect(word3, pattern = "[[:digit:]]"), 
+        !str_detect(word3, pattern = "[[:punct:]]"),
+        !str_detect(word3, pattern = "(.)\\1{2,}"), 
+        !str_detect(word3, pattern = "\\b(.)\\b")) %>%
+      mutate(word1 = wordStem(word1), word2 = wordStem(word2), word3 = wordStem(word3)) %>%
+      unite(trigram, c(word1, word2, word3), sep = " ") %>%
+      count(trigram, sort = TRUE)
+    transpose_trigrams <- transpose(data.frame(cur_trigrams))
+    colnames(transpose_trigrams) <- transpose_trigrams[1,]
+    transpose_trigrams <- transpose_trigrams[-1,]
+    words[[dfid]] <- transpose_trigrams
+    rm(transpose_trigrams)
+    gc()
+}
+
+review_trigram_df <- bind_rows(words)
+review_trigram_df[is.na(review_trigram_df)] <- 0
+
+```
+
+```{r}
+desc_trigram <- colnames(desc_trigram_df)
+review_trigram <- colnames(review_trigram_df)
+intersect_trigram <- intersect(desc_trigram, review_trigram)
+intersect_desc_df <- desc_trigram_df[intersect_trigram]
+intersect_review_df <- review_trigram_df[intersect_trigram]
+
+#hosts' side
+if_occurrence_desc_df <- intersect_desc_df 
+if_occurrence_desc_df[is.na(if_occurrence_desc_df)] <- 0
+if_occurrence_desc_df[if_occurrence_desc_df != 0] <- 1 
+if_occurrence_desc_df <- data.frame(apply(if_occurrence_desc_df, 2, function(x) as.numeric(as.character(x))))
+
+#residents' side
+if_occurrence_review_df <- intersect_review_df
+if_occurrence_review_df[is.na(if_occurrence_review_df)] <- 0
+if_occurrence_review_df <- data.frame(apply(if_occurrence_review_df, 2, function(x) as.numeric(as.character(x))))
+
+trigram_matched_df <- data.frame(mapply(`*`, if_occurrence_review_df, if_occurrence_desc_df))
+trigram_matched_df$matched_count <- rowSums(trigram_matched_df)
+
+#test
+trigram_matched_df$matched_count
+summary(trigram_matched_df$matched_count)
+
+```
+
+## Sentiment Analysis
+Perform sentiment analysis on residents' comments for each host. Higher score indicates positive sentiment and lower score indicated negative sentiment. The median score is 0.3798. We then normalize the sentiment score based on the median score. The rule is: senti_score = (score - median) / (3rd quantile - 1st quantile).
+
+```{r, warning = FALSE}
+#1. calculate sentiment score
+id_set <- concat_reviews$listing_id
+concat_reviews$sentiment <- 0
+for (id in id_set) {
+  cur_review <- concat_reviews[concat_reviews$listing_id == id,]
+  cur_score <- sentiment_by(cur_review$comments)$ave_sentiment
+  concat_reviews[concat_reviews$listing_id == id,]$sentiment <- cur_score
+}
+
+#2. summary
+senti_median <- median(concat_reviews$sentiment) 
+senti_summary <- summary(concat_reviews$sentiment)
+q1 <- senti_summary[2]
+q3 <- senti_summary[5]
+senti_summary
+
+
+#3. visualization
+ggplot(concat_reviews, aes(x = sentiment)) + geom_histogram(aes(y=..density..), colour = "black", fill = "white") + geom_vline(aes(xintercept=mean(sentiment)),
+            color="blue", linetype="dashed", size=1) + geom_density(alpha=.2, fill="#FF6666")
+
+#4. normalization
+concat_reviews$sentiment <- (concat_reviews$sentiment - senti_median) / (q3 - q1)
+```
