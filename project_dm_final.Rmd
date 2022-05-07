@@ -1,0 +1,200 @@
+---
+title: "project_dm_final"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load data from host sides and concatenate wording information such as amenities, general description about renting place, neighborhood overview, and host's personal information. Notice that we merely gather information given by hosts(landlords) instead of renters(clients). 
+```{r}
+#loading csv file
+library(tidyverse)
+library(tidytext)
+host_df <- read.csv("listings-details.csv",header=TRUE)
+host_desc <- host_df %>% select(id, description, amenities, neighborhood_overview, host_about)
+
+#concatenate comments in a column by host's id
+library('stringr')
+host_desc$desc <- str_c(host_desc$description, ' ', host_desc$amenities, ' ', host_desc$neighborhood_overview, ' ', host_desc$host_about)
+concat_host_desc <- host_desc$desc
+concat_host_desc <- as.list(concat_host_desc[1:10]) 
+```
+
+Create a customized stopwords that don't consist of
+```{r}
+not_list <- c('no', 'not', "aren't", "couldn't", "didn't", "doesn't", "hadn't", "hasn't", "haven't", "isn't", "mustn't", "shouldn't", "wasn't", "weren't", "won't", 'wouldn', "wouldn't")
+ori_stop_words <- stop_words$word
+new_stop_words <- ori_stop_words[!(ori_stop_words %in% not_list)]
+```
+
+
+Apply data cleaning and convert the wording description to tokens. Notice that we lower case all words, remove html tags, correct the misspelled words, remove stopwords, and perform stemming to avoid repeated words with different forms. 
+```{r}
+host_desc$desc <- tolower(host_desc$desc)
+host_desc$desc <- gsub("[[:digit:]]+", " ", host_desc$desc)
+host_desc$desc <- gsub("<.*?>", " ", host_desc$desc)
+host_desc$desc <- gsub(",:'!\"", " ", host_desc$desc)
+
+
+#for (dfid in c(1:length(row.names(host_desc))))
+
+host_desc[1,]
+cur_bigrams <- host_desc[1,] %>% 
+  select('desc') %>% 
+  unnest_tokens(bigram, 'desc', token = "ngrams", n = 2) %>%
+  separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+  filter(
+    !word1 %in% new_stop_words,
+    !str_detect(word1, pattern = "[[:digit:]]"), 
+    !str_detect(word1, pattern = "[[:punct:]]"),
+    !str_detect(word1, pattern = "(.)\\1{2,}"), 
+    !str_detect(word1, pattern = "\\b(.)\\b")) %>%
+  filter(
+    !word1 %in% new_stop_words,
+    !str_detect(word2, pattern = "[[:digit:]]"), 
+    !str_detect(word2, pattern = "[[:punct:]]"),
+    !str_detect(word2, pattern = "(.)\\1{2,}"), 
+    !str_detect(word2, pattern = "\\b(.)\\b")) %>%
+  mutate(word1 = text_tokens(word1, stemmer = stem_hunspell), word2 = stem_words(word2)) %>%
+  unite(bigram, c(word1, word2), sep = " ") %>% 
+  count(bigram, sort = TRUE)
+cur_bigrams
+
+
+cur_bigrams$word1 <- stem_words(cur_bigrams$word1)
+cur_bigrams$word2 <- stem_words(cur_bigrams$word2)
+
+
+for (dfid in c(1:length(concat_host_desc))) {
+  cur_bigrams <- host_desc[dfid,] %>% 
+  select('desc') %>% 
+  unnest_tokens(bigram, 'desc', token = "ngrams", n = 2) %>%
+  separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% new_stop_words, !word2 %in% new_stop_words) %>%
+  unite(bigram, c(word1, word2), sep = " ") %>% 
+  count(bigram, sort = TRUE)
+}
+
+
+
+
+
+
+desc_bigrams <- concat_host_desc %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+unnest_tokens(word, `Review Text`) %>%
+  count(word, sort = TRUE)
+
+
+library(stopwords)
+library(hunspell)
+library(udpipe)
+library(textstem)
+dl <- udpipe_download_model(language = "english")
+eng_model <- udpipe_load_model(file = dl$file_model)
+
+words <- list()
+for (dfid in c(1:length(concat_host_desc))) {
+    desc <- concat_host_desc[dfid]
+    desc_lower <- tolower(desc)
+    desc_num_removed <- gsub("[[:digit:]]+", " ", desc_lower)
+    #remove tags
+    desc_tag_removed <- gsub("<.*?>", " ", desc_num_removed)
+    tokens <- strsplit(desc_tag_removed, "[^a-z0-9]")
+    #remove words with less than 2 characters
+    tokens <- unlist(lapply(tokens, function(x) x[nchar(x) > 2]))
+    #correct mis-spelled words
+    tokens_correct <- tokens[hunspell_check(tokens)]
+    #remove stopwords
+    tokens_clean <- setdiff(tokens_correct, new_stop_words)
+    #perform stemming
+    tokens_stemmed <- stem_words(tokens_stemmed)
+    udpipe_out <- udpipe_annotate(
+        eng_model, x = bigrams,
+        tagger = 'default', parser = 'none'
+    )
+    lemm_df <- as.data.frame(udpipe_out)
+    lemm_list <- lemm_df$lemma
+    words[[dfid]] <- as.data.frame(as.list(table(lemm_list)))
+    rm(lemm_df)
+    gc()
+}
+
+
+lemm_df$upos
+
+as.data.frame(udpipe_out)
+desc_token_df <- bind_rows(words)
+desc_token_df[is.na(desc_token_df)] <- 0
+
+#test
+desc_token_df[1:3, 1:5]
+```
+Load data from residents' side. We basically focus on residents' reviews on the renting experience with the host. Notice that each host is connected with more than one residents over time. We concatenate all reviews for each singular host.
+```{r}
+#load csv files
+reviews = as.data.frame(read.csv("reviews.csv",header=TRUE)%>%select(listing_id,comments))
+
+#concatenate comments in a column by listing_id
+concat_reviews <- reviews %>% group_by(listing_id) %>% summarise(comments=paste(comments, collapse=" "))
+comments <- concat_reviews$comments
+comments <- as.list(comments[1:10])
+
+```
+
+Apply data cleaning and convert the wording reviews to tokens. Notice that we lower case all words, remove html tags, correct the misspelled words, remove stopwords, and perform stemming to avoid repeated words with different forms. 
+```{r}
+#extract tokens
+words <- list()
+for (dfid in c(1:length(comments))) {
+    comment <- comments[dfid]
+    comment_lower <- tolower(comment)
+    comments_num_removed <- gsub("[[:digit:]]+", " ", comment_lower)
+    comments_tag_removed <- gsub("<.*?>", " ", comments_num_removed)
+    tokens <- strsplit(comments_tag_removed, "[^a-z0-9]")
+    #remove words with less than 2 characters
+    tokens <- unlist(lapply(tokens, function(x) x[nchar(x) > 2]))
+    #remove mis-spelled words
+    tokens_correct <- tokens[hunspell_check(tokens)]
+    #remove stopwords
+    tokens_clean <- setdiff(tokens_correct, stopwords)
+    #perform stemming
+    tokens_stemmed <- stem_words(tokens_clean)
+    udpipe_out <- udpipe_annotate(
+        eng_model, x = unlist(tokens_stemmed),
+        tagger = 'default', parser = 'none'
+    )
+    lemm_df <- as.data.frame(udpipe_out)
+    lemm_list <- lemm_df$lemma
+    words[[dfid]] <- as.data.frame(as.list(table(lemm_df$lemma)))
+    rm(lemm_df)
+    gc()
+}
+length(words)
+review_token_df <- bind_rows(words)
+review_token_df[is.na(review_token_df)] <- 0
+
+#test
+review_token_df[1:3, 1:5]
+```
+
+Find intersect tokens from descriptions(hosts) and reviews(residents). Create new dataframe for both sides where the columns are limited to the intersect tokens. 
+```{r}
+desc_tokens <- colnames(desc_token_df)
+review_tokens <- colnames(review_token_df)
+intersect_tokens <- intersect(desc_tokens, review_tokens)
+intersect_desc_df <- desc_token_df[intersect_tokens]
+intersect_review_df <- review_token_df[intersect_tokens]
+
+#test
+intersect_review_df[1:3, 1:5] #new review dataframe with intersect tokens
+```
+
+Consider the cases that some hosts may have fewer comments than other hosts due to shorter renting period, which means some tokens may appear more times in 
+
+
+
+
