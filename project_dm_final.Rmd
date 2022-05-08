@@ -121,8 +121,8 @@ tfidf_df <- data.frame(tfidf_matrix)
 tfidf_df[1:3, 1:5]
 ```
 ```{r}
-mtfidf <- apply(tfidf, 2, max)
-ggplot(data.frame(as.numeric(mtfidf)), aes(as.numeric(mtfidf))) + geom_histogram(bins = 100) + scale_x_log10() + geom_vline(aes(xintercept = max_stopword), colour="red")
+mtfidf <- apply(tfidf_df, 2, max)
+ggplot(data.frame(as.numeric(mtfidf)), aes(as.numeric(mtfidf))) + geom_histogram(bins = 100) + scale_x_log10()
 
 mtfidf_df <- data.frame(mtfidf)
 tfidf_dist <- dist(as.matrix(mtfidf_df))
@@ -142,7 +142,7 @@ In calculation stage, since we aim to perform add-1 smoothing to bigram and trig
 We are about to generate bigrams in this section, and move on to generate trigrams in the next section.
 
 Let's start with descriptions from hosts' side. Apply data cleaning and convert the wording description to bigrams. Notice that we lower case all words, remove html tags, correct the misspelled words, remove stopwords, and perform stemming to avoid repeated words with different forms. 
-```{r}
+```{r, warning=FALSE}
 words <- list()
 for (dfid in c(1:length(concat_host_desc))) {
     cur_bigrams <- host_desc[dfid,] %>% 
@@ -385,34 +385,8 @@ trigram_matched_df$matched_count
 summary(trigram_matched_df$matched_count)
 ```
 
-Apply add-1 smoothing on trigram model and calculate Laplacian probabilities.
-```{r, warning=FALSE}
-trigram_model <- trigram_matched_df
-trigram_list <- colnames(trigram_model)
-
-#size of vocabulary
-V <- length(trigram_list)
-
-#calculate bigram probabilities
-for (r in c(1: nrow(trigram_model))) {
-  for (c in c(1: (ncol(trigram_model)-1))) {
-    prev_word <- strsplit(trigram_list[c], split = "[.]")[[1]][1]
-    prev_word_count <- max(trigram_df[r, prev_word], 0)
-    bigram_model[r,c] <- (bigram_model[r,c] + 1.0) / (prev_word_count + V)
-  }
-}
-
-prev_word <- strsplit(trigram_list[c], split = "[.]")[[1]][1]
-    prev_word_count <- max(trigram_df[r, prev_word], 0)
-    bigram_model[r,c] <- (bigram_model[r,c] + 1.0) / (prev_word_count + V)
-
-
-#test
-bigram_model[1:3, 1:5]
-```
-
 ## Sentiment Analysis
-Perform sentiment analysis on residents' comments for each host. Higher score indicates positive sentiment and lower score indicated negative sentiment. The median score is 0.3798. We then normalize the sentiment score based on the median score. The rule is: senti_score = (score - median) / (3rd quantile - 1st quantile).
+Perform sentiment analysis on residents' comments for each host. Higher score indicates positive sentiment and lower score indicated negative sentiment. The median score is 0.3798. We then normalize the sentiment score based on the median score. The formula is: senti_score = (score - median) / (3rd quantile - 1st quantile).
 
 ```{r, warning = FALSE}
 #1. calculate sentiment score
