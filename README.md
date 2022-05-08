@@ -8,3 +8,4 @@ We obtained our dataset from Insideairbnb.com, where newly scraped data of listi
 
 ## File directory
 [project_dm_final.Rmd](https://github.com/ja3569/airbnb_honest_host/blob/main/project_dm_final.Rmd) provides the R code we wrote
+[ADM_Final_Project.pdf](https://github.com/ja3569/airbnb_honest_host/blob/main/ADM_Final%20Project.pdf) provides the writte report
